@@ -1,0 +1,130 @@
+import { pbStream } from 'it-pb-stream';
+import pDefer from 'p-defer';
+import { TimeoutController } from 'timeout-abort-controller';
+import { readCandidatesUntilConnected } from './util';
+import * as pb from './pb/index.js';
+import { abortableDuplex } from 'abortable-iterator';
+import { logger } from '@libp2p/logger';
+import { DataChannelMuxerFactory } from '../muxer';
+const DEFAULT_TIMEOUT = 30 * 1000;
+const log = logger('libp2p:webrtc:peer');
+export async function handleIncomingStream({ rtcConfiguration, stream: rawStream }) {
+    const timeoutController = new TimeoutController(DEFAULT_TIMEOUT);
+    const signal = timeoutController.signal;
+    const stream = pbStream(abortableDuplex(rawStream, timeoutController.signal)).pb(pb.Message);
+    const pc = new RTCPeerConnection(rtcConfiguration);
+    const muxerFactory = new DataChannelMuxerFactory(pc);
+    const connectedPromise = pDefer();
+    signal.onabort = () => { connectedPromise.reject(); };
+    // candidate callbacks
+    pc.onicecandidate = ({ candidate }) => {
+        stream.write({
+            type: pb.Message.Type.ICE_CANDIDATE,
+            data: (candidate != null) ? JSON.stringify(candidate.toJSON()) : ''
+        });
+    };
+    // setup callback for peerconnection state change
+    pc.onconnectionstatechange = (_) => {
+        log.trace('receiver peerConnectionState state: ', pc.connectionState);
+        switch (pc.connectionState) {
+            case 'connected':
+                connectedPromise.resolve();
+                break;
+            case 'failed':
+            case 'disconnected':
+            case 'closed':
+                connectedPromise.reject();
+                break;
+            default:
+                break;
+        }
+    };
+    // read an SDP offer
+    const pbOffer = await stream.read();
+    if (pbOffer.type !== pb.Message.Type.SDP_OFFER) {
+        // TODO: Find better way to print undefined without linter complaining
+        throw new Error(`expected message type SDP_OFFER, received: ${pbOffer.type ?? 'undefined'} `);
+    }
+    const offer = new RTCSessionDescription({
+        type: 'offer',
+        sdp: pbOffer.data
+    });
+    await pc.setRemoteDescription(offer).catch(err => {
+        log.error('could not execute setRemoteDescription', err);
+        throw new Error('Failed to set remoteDescription');
+    });
+    // create and write an SDP answer
+    const answer = await pc.createAnswer();
+    // write the answer to the remote
+    stream.write({ type: pb.Message.Type.SDP_ANSWER, data: answer.sdp });
+    await pc.setLocalDescription(answer).catch(err => {
+        log.error('could not execute setLocalDescription', err);
+        throw new Error('Failed to set localDescription');
+    });
+    // wait until candidates are connected
+    await readCandidatesUntilConnected(connectedPromise, pc, stream);
+    // close the dummy channel
+    return [pc, muxerFactory];
+}
+export async function connect({ rtcConfiguration, signal, stream: rawStream }) {
+    const stream = pbStream(abortableDuplex(rawStream, signal)).pb(pb.Message);
+    // setup peer connection
+    const pc = new RTCPeerConnection(rtcConfiguration);
+    const muxerFactory = new DataChannelMuxerFactory(pc);
+    // the label is not relevant to connection initiation but can be
+    // useful for debugging
+    const connectedPromise = pDefer();
+    pc.onconnectionstatechange = (_) => {
+        switch (pc.connectionState) {
+            case 'connected':
+                {
+                    connectedPromise.resolve();
+                    return;
+                }
+            case 'closed':
+            case 'disconnected':
+            case 'failed':
+                {
+                    connectedPromise.reject();
+                    break;
+                }
+            default:
+        }
+    };
+    // reject the connectedPromise if the signal aborts
+    signal.onabort = connectedPromise.reject;
+    // we create the channel so that the peerconnection has a component for
+    // which to collect candidates
+    const channel = pc.createDataChannel('init');
+    // setup callback to write ICE candidates to the remote
+    // peer
+    pc.onicecandidate = ({ candidate }) => {
+        stream.write({
+            type: pb.Message.Type.ICE_CANDIDATE,
+            data: (candidate != null) ? JSON.stringify(candidate.toJSON()) : ''
+        });
+    };
+    // create an offer
+    const offerSdp = await pc.createOffer();
+    // write the offer to the stream
+    stream.write({ type: pb.Message.Type.SDP_OFFER, data: offerSdp.sdp });
+    // set offer as local description
+    await pc.setLocalDescription(offerSdp).catch(err => {
+        log.error('could not execute setLocalDescription', err);
+        throw new Error('Failed to set localDescription');
+    });
+    // read answer
+    const answerMessage = await stream.read();
+    if (answerMessage.type !== pb.Message.Type.SDP_ANSWER) {
+        throw new Error('remote should send an SDP answer');
+    }
+    const answerSdp = new RTCSessionDescription({ type: 'answer', sdp: answerMessage.data });
+    await pc.setRemoteDescription(answerSdp).catch(err => {
+        log.error('could not execute setRemoteDescription', err);
+        throw new Error('Failed to set remoteDescription');
+    });
+    await readCandidatesUntilConnected(connectedPromise, pc, stream);
+    channel.close();
+    return [pc, muxerFactory];
+}
+//# sourceMappingURL=handler.js.map
