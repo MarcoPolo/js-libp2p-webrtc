@@ -1,13 +1,22 @@
 import { EventEmitter } from '@libp2p/interfaces/events';
 import { multiaddr } from '@multiformats/multiaddr';
+import { inappropriateMultiaddr } from '../error.js';
+import { TRANSPORT } from './transport.js';
 export class WebRTCPeerListener extends EventEmitter {
     constructor(opts) {
         super();
         this.opts = opts;
         this.listeningAddrs = [];
     }
+    getBaseAddress(ma) {
+        const addrs = ma.toString().split(TRANSPORT);
+        if (addrs.length < 2) {
+            throw inappropriateMultiaddr('base address not found');
+        }
+        return multiaddr(addrs[0]);
+    }
     async listen(ma) {
-        const baseAddr = multiaddr(ma.toString().split('/webrtc-peer').find(a => a !== ''));
+        const baseAddr = this.getBaseAddress(ma);
         const tpt = this.opts.transportManager.transportForMultiaddr(baseAddr);
         const listener = tpt?.createListener({ ...this.opts });
         await listener?.listen(baseAddr);

@@ -10,6 +10,7 @@ export interface ListenerOptions {
 export declare class WebRTCPeerListener extends EventEmitter<ListenerEvents> implements Listener {
     private readonly opts;
     constructor(opts: ListenerOptions);
+    private getBaseAddress;
     private listeningAddrs;
     listen(ma: Multiaddr): Promise<void>;
     getAddrs(): Multiaddr[];

@@ -1,11 +1,11 @@
 import { pbStream } from 'it-pb-stream';
 import pDefer from 'p-defer';
 import { TimeoutController } from 'timeout-abort-controller';
-import { readCandidatesUntilConnected } from './util';
+import { readCandidatesUntilConnected } from './util.js';
 import * as pb from './pb/index.js';
 import { abortableDuplex } from 'abortable-iterator';
 import { logger } from '@libp2p/logger';
-import { DataChannelMuxerFactory } from '../muxer';
+import { DataChannelMuxerFactory } from '../muxer.js';
 const DEFAULT_TIMEOUT = 30 * 1000;
 const log = logger('libp2p:webrtc:peer');
 export async function handleIncomingStream({ rtcConfiguration, stream: rawStream }) {

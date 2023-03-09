@@ -4,6 +4,6 @@ export function webRTC() {
     return (components) => new WebRTCTransport(components);
 }
 export function webRTCDirect(init) {
-    return (components) => new WebRTCDirectTransport(components, init);
+    return (components) => new WebRTCDirectTransport(components, init ?? {});
 }
 //# sourceMappingURL=index.js.map
